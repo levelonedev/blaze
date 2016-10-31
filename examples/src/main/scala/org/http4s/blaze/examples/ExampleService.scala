@@ -9,8 +9,6 @@ import org.http4s.blaze.http.{ResponseBuilder, _}
 import org.http4s.blaze.pipeline.stages.monitors.IntervalConnectionMonitor
 import org.http4s.blaze.util.{BufferTools, Execution}
 
-import scala.annotation.tailrec
-import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.Future
 
 object ExampleService {
@@ -18,7 +16,7 @@ object ExampleService {
   private implicit val ec = Execution.trampoline
 
   def http1Stage(status: Option[IntervalConnectionMonitor], maxRequestLength: Int, channel: Option[AtomicReference[ServerChannel]] = None): HttpServerStage =
-    new HttpServerStage(1024*1024, maxRequestLength, Execution.trampoline)(service(status, channel))
+    new HttpServerStage(maxRequestLength, Execution.trampoline)(service(status, channel))
 
   def service(status: Option[IntervalConnectionMonitor], channel: Option[AtomicReference[ServerChannel]] = None)
              (request: HttpRequest): Future[ResponseBuilder] = {

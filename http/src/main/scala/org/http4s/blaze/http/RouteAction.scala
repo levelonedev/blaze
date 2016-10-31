@@ -12,7 +12,7 @@ trait RouteAction {
   /** Generate a HTTP response using the passed continuation
     *
     * @param commit function which commits the response prelude and provides an appropriate [[BodyWriter]]
-    * @tparam Writer the type of the [[BodyWriter]] with a refinded `Finished` type
+    * @tparam Writer the type of the [[BodyWriter]] with a refined `Finished` type
     * @return an asynchronous `BodyWriter#Finished` object. This type enforces that the [[BodyWriter]]
     *         has been successfully closed.
     */
@@ -67,8 +67,10 @@ object RouteAction {
     byteBuffer(200, "OK", headers, ByteBuffer.wrap(body))
 
   /** Generate a 200 OK HTTP response from a `String` */
-  def Ok(body: String, headers: Headers): HttpResponse =
-    Ok(body.getBytes(StandardCharsets.UTF_8), ("content-type", "text/plain; charset=utf-8")+:headers)
+  def Ok(body: String, headers: Headers): HttpResponse = {
+    val bytes = body.getBytes(StandardCharsets.UTF_8)
+    Ok(bytes, ("content-type", "text/plain; charset=utf-8") +: ("content-length", bytes.length.toString) +: headers)
+  }
 
   /** Generate a 200 OK HTTP response from a `String` */
   def Ok(body: String): HttpResponse = Ok(body, Nil)
