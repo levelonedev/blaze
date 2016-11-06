@@ -1,6 +1,6 @@
 package org.http4s.blaze.http
 
-import java.nio.ByteBuffer
+import java.nio.{ByteBuffer, CharBuffer}
 import java.nio.charset.StandardCharsets
 
 import org.http4s.blaze.http.util.HeaderTools
@@ -61,8 +61,6 @@ private final class HttpCodec(maxNonBodyBytes: Int, pipeline: TailStage[ByteBuff
     // Renders the headers except those that will modify connection state and data encoding
     val sh@SpecialHeaders(_, _, connection) = HeaderTools.renderHeaders(sb, prelude.headers)
 
-    println(s"Special headers: $sh. StringBuilder: $sb")
-
     val keepAlive = connection match {
       case _ if forceClose => false
       case Some(value) => HeaderTools.isKeepAlive(value, minorVersion)
@@ -79,10 +77,7 @@ private final class HttpCodec(maxNonBodyBytes: Int, pipeline: TailStage[ByteBuff
       case SpecialHeaders(_, Some(len), _) =>
         Try(len.toLong) match {
           case Success(len) =>
-            println("Fixed length encoder")
-            sb.append("content-length: ").append(len)
-            val prelude = StandardCharsets.US_ASCII.encode(sb.result())
-            new StaticBodyWriter(forceClose, prelude, len)
+            new StaticBodyWriter(forceClose, sb, len)
 
           case Failure(ex) => ???
         }
@@ -150,15 +145,18 @@ private final class HttpCodec(maxNonBodyBytes: Int, pipeline: TailStage[ByteBuff
 
   // Body writers ///////////////////
 
-  private class StaticBodyWriter(forceClose: Boolean, prelude: ByteBuffer, len: Long) extends InternalWriter {
-    private val cache = new ArrayBuffer[ByteBuffer](3)
-    cache += prelude
-
-    private var cachedBytes = prelude.remaining()
-
+  private class StaticBodyWriter(forceClose: Boolean, sb: StringBuilder, len: Long) extends InternalWriter {
+    private var cache = new ArrayBuffer[ByteBuffer](3)
+    private var cachedBytes: Int = _
     private var closed = false
     private var written: Long = 0L
 
+    {
+      sb.append("content-length: ").append(len).append("\r\n\r\n")
+      val prelude = StandardCharsets.ISO_8859_1.encode(CharBuffer.wrap(sb))
+      cache += prelude
+      cachedBytes = prelude.remaining()
+    }
 
     override def write(buffer: ByteBuffer): Future[Unit] = lock.synchronized {
       if (closed) InternalWriter.closedChannelException
@@ -205,8 +203,8 @@ private final class HttpCodec(maxNonBodyBytes: Int, pipeline: TailStage[ByteBuff
       else {
         logger.debug("StaticBodyWriter: Channel flushed")
         if (cache.nonEmpty) {
-          val buffs = cache.result()
-          cache.clear()
+          val buffs = cache
+          cache = new ArrayBuffer[ByteBuffer](math.min(16, buffs.length + 2))
           cachedBytes = 0
           pipeline.channelWrite(buffs)
         }
@@ -343,13 +341,12 @@ private final class HttpCodec(maxNonBodyBytes: Int, pipeline: TailStage[ByteBuff
       if (underlying != null) underlying.close()
       else if (closed) InternalWriter.closedChannelException
       else {
-        println("Closing writer.")
         // write everything we have as a fixed length body
         closed = true
         val buffs = cache.result(); cache.clear();
         val len = buffs.foldLeft(0)((acc, b) => acc + b.remaining())
         sb.append(s"Content-Length: $len\r\n\r\n")
-        val prelude = StandardCharsets.US_ASCII.encode(sb.result())
+        val prelude = StandardCharsets.ISO_8859_1.encode(CharBuffer.wrap(sb))
 
         pipeline.channelWrite(prelude::buffs).map(_ => lock.synchronized {
           selectComplete(forceClose)
@@ -371,7 +368,6 @@ private final class HttpCodec(maxNonBodyBytes: Int, pipeline: TailStage[ByteBuff
   private def selectComplete(forceClose: Boolean): RouteResult = {
     if (forceClose || !parser.contentComplete()) Close
     else {
-      println(s"Resetting parser")
       parser.reset()
       Reload
     }
