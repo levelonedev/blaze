@@ -28,7 +28,7 @@ class HttpServerStage(maxNonBodyBytes: Int, ec: ExecutionContext)(handleRequest:
 
   // Will act as our loop
   override def stageStartup() {
-    logger.info("Starting HttpStage")
+    logger.debug("Starting HttpStage")
     requestLoop()
   }
 
