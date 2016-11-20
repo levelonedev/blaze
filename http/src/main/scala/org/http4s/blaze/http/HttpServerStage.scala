@@ -11,7 +11,7 @@ import org.http4s.blaze.pipeline.Command.EOF
 import scala.util.{Failure, Success}
 import scala.concurrent.ExecutionContext
 
-class HttpServerStage(handleRequest: HttpService, maxNonBodyBytes: Int, ec: ExecutionContext)
+class HttpServerStage(service: HttpService, maxNonBodyBytes: Int, ec: ExecutionContext)
   extends TailStage[ByteBuffer] { httpServerStage =>
 
   private implicit def implicitEC = trampoline
@@ -19,7 +19,7 @@ class HttpServerStage(handleRequest: HttpService, maxNonBodyBytes: Int, ec: Exec
   val name = "HTTP/1.1_Stage"
 
   private[this] val codec = new  HttpCodec(maxNonBodyBytes, this)
-  
+
   /////////////////////////////////////////////////////////////////////////////////////////
 
   // Will act as our loop
@@ -31,7 +31,7 @@ class HttpServerStage(handleRequest: HttpService, maxNonBodyBytes: Int, ec: Exec
   private def requestLoop(): Unit = {
     codec
       .getRequest()
-      .flatMap(handleRequest)(ec)
+      .flatMap(service)(ec)
       .onComplete {
         case Success(HttpResponse(resp)) =>
           codec.renderResponse(resp).onComplete {
