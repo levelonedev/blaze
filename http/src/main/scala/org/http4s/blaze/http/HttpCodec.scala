@@ -22,11 +22,13 @@ import scala.util.{Failure, Success, Try}
   * of the return values.
   */
 private final class HttpCodec(maxNonBodyBytes: Int, pipeline: TailStage[ByteBuffer]) {
-
   import HttpCodec._
 
   private[this] val parser = new BlazeServerParser[(String, String)](maxNonBodyBytes)
   private[this] var buffered: ByteBuffer = BufferTools.emptyBuffer
+
+  // Counter to allow certain machinery to identify the message exchange we are in
+  private[this] var requestId: Long = 0L
 
   private[this] val lock = parser
 
@@ -77,20 +79,18 @@ private final class HttpCodec(maxNonBodyBytes: Int, pipeline: TailStage[ByteBuff
     }
 
     if (!keepAlive) sb.append("connection: close\r\n")
-    else if (minorVersion == 0 && keepAlive) sb.append("connection: keep-alive\r\n")
-
-    // TODO: host and date headers
+    else if (minorVersion == 0) sb.append("connection: keep-alive\r\n")
 
     sh match {
       case SpecialHeaders(Some(te), _, _) if te.equalsIgnoreCase("chunked") =>
         new ChunkedBodyWriter(forceClose, sb, -1)
 
       case SpecialHeaders(_, Some(len), _) =>
-        Try(len.toLong) match {
-          case Success(len) =>
-            new StaticBodyWriter(forceClose, sb, len)
-
-          case Failure(ex) => ???
+        try {
+          new StaticBodyWriter(forceClose, sb, len.toLong)
+        } catch { case ex: NumberFormatException =>
+          logger.warn(ex)(s"Content length header has invalid length: '$len'. Reverting to undefined content length")
+          new SelectingWriter(forceClose, sb)
         }
 
       case _ => new SelectingWriter(forceClose, sb)
@@ -101,18 +101,28 @@ private final class HttpCodec(maxNonBodyBytes: Int, pipeline: TailStage[ByteBuff
     if (parser.contentComplete()) {
       MessageBody.emptyMessageBody
     }
-    else new MessageBody {
-      override def apply(): Future[ByteBuffer] = lock.synchronized {
-        if (parser.contentComplete()) BufferTools.emptyFutureBuffer
-        else {
-          val buf = parser.parseBody(buffered)
-          if (buf.hasRemaining) Future.successful(buf)
-          else if (parser.contentComplete()) BufferTools.emptyFutureBuffer
-          else {  // need more data
-            pipeline.channelRead().flatMap(buffer => lock.synchronized {
-              buffered = BufferTools.concatBuffers(buffered, buffer)
-              apply()
-            })(Execution.trampoline)
+    else {
+      new MessageBody {
+        // We store the request that this body is associated with. This is
+        // to avoid the situation where a user stores the reader and attempts
+        // to use it later, resulting in a corrupt HTTP protocol
+        private val thisRequest = requestId
+
+        override def apply(): Future[ByteBuffer] = lock.synchronized {
+          if (thisRequest != requestId || parser.contentComplete()) {
+            BufferTools.emptyFutureBuffer
+          }
+          else {
+            val buf = parser.parseBody(buffered)
+            if (buf.hasRemaining) Future.successful(buf)
+            else if (parser.contentComplete()) BufferTools.emptyFutureBuffer
+            else {
+              // need more data
+              pipeline.channelRead().flatMap(buffer => lock.synchronized {
+                buffered = BufferTools.concatBuffers(buffered, buffer)
+                apply()
+              })(Execution.trampoline)
+            }
           }
         }
       }
@@ -172,7 +182,7 @@ private final class HttpCodec(maxNonBodyBytes: Int, pipeline: TailStage[ByteBuff
     private var closed = false
     private var written: Long = 0L
 
-    {
+    { // constructor business
       sb.append("content-length: ").append(len).append("\r\n\r\n")
       val prelude = StandardCharsets.ISO_8859_1.encode(CharBuffer.wrap(sb))
       cache += prelude
@@ -364,10 +374,10 @@ private final class HttpCodec(maxNonBodyBytes: Int, pipeline: TailStage[ByteBuff
       else {
         // write everything we have as a fixed length body
         closed = true
-        val buffs = cache.result(); cache.clear();
-        val len = buffs.foldLeft(0)((acc, b) => acc + b.remaining())
-        sb.append(s"Content-Length: $len\r\n\r\n")
-        val prelude = StandardCharsets.ISO_8859_1.encode(CharBuffer.wrap(sb))
+        val buffs = cache.result()
+        cache.clear()
+        sb.append("content-length: ").append(cacheSize).append("\r\n\r\n")
+        val prelude = StandardCharsets.US_ASCII.encode(CharBuffer.wrap(sb))
 
         pipeline.channelWrite(prelude::buffs).map(_ => lock.synchronized {
           selectComplete(forceClose)
@@ -376,7 +386,7 @@ private final class HttpCodec(maxNonBodyBytes: Int, pipeline: TailStage[ByteBuff
     }
 
     // start a chunked encoding writer and write the contents of the cache
-    private def startChunked(): Future[Unit] = {
+    private[this] def startChunked(): Future[Unit] = {
       underlying = new ChunkedBodyWriter(false, sb, InternalWriter.bufferLimit)
 
       val buff = BufferTools.joinBuffers(cache)
@@ -386,9 +396,13 @@ private final class HttpCodec(maxNonBodyBytes: Int, pipeline: TailStage[ByteBuff
     }
   }
 
-  private def selectComplete(forceClose: Boolean): RouteResult = {
-    if (forceClose || !parser.contentComplete()) Close
+  // Upon completion of rendering the HTTP response we need to determine if we
+  // are going to continue using this session (socket).
+  private[this] def selectComplete(forceClose: Boolean): RouteResult = {
+    // TODO: what should we do about the trailer headers?
+    if (forceClose || !parser.contentComplete() || parser.inChunkedHeaders()) Close
     else {
+      requestId += 1
       parser.reset()
       Reload
     }
@@ -400,7 +414,6 @@ private object HttpCodec {
 
   private val CRLFBytes = "\r\n".getBytes(StandardCharsets.US_ASCII)
   private val terminationBytes = "\r\n0\r\n\r\n".getBytes(StandardCharsets.US_ASCII)
-  private def CRLFBuffer = ByteBuffer.wrap(CRLFBytes)
 
   sealed trait RouteResult
   case object Reload  extends RouteResult

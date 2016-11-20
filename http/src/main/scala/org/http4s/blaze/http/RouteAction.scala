@@ -45,6 +45,10 @@ object RouteAction {
   /** generate a HTTP response from a single `ByteBuffer`
     *
     * @param body the single `ByteBuffer` which represents the body.
+    *
+    * Note: this method will not modify the passed `ByteBuffer`, instead making
+    * read-only views of it when writing to the socket, so the resulting responses
+    * can be reused multiple times.
     */
   def byteBuffer(code: Int, status: String, headers: Headers, body: ByteBuffer): HttpResponse = HttpResponse(
     new RouteAction {
@@ -53,7 +57,7 @@ object RouteAction {
         val prelude = HttpResponsePrelude(code, status, headers)
         val writer = responder(prelude)
 
-        writer.write(body).flatMap(_ => writer.close())(Execution.directec)
+        writer.write(body.asReadOnlyBuffer()).flatMap(_ => writer.close())(Execution.directec)
       }
     }
   )
@@ -66,10 +70,14 @@ object RouteAction {
   def Ok(body: Array[Byte], headers: Headers = Nil): HttpResponse =
     byteBuffer(200, "OK", headers, ByteBuffer.wrap(body))
 
+  /** Generate a 200 OK HTTP response from an `Array[Byte]` */
+  def Ok(body: Array[Byte]): HttpResponse = Ok(body, Nil)
+
   /** Generate a 200 OK HTTP response from a `String` */
   def Ok(body: String, headers: Headers): HttpResponse = {
     val bytes = body.getBytes(StandardCharsets.UTF_8)
-    Ok(bytes, ("content-type", "text/plain; charset=utf-8") +: ("content-length", bytes.length.toString) +: headers)
+    val hs = ("content-type", "text/plain; charset=utf-8") +: ("content-length", bytes.length.toString) +: headers
+    Ok(bytes, hs)
   }
 
   /** Generate a 200 OK HTTP response from a `String` */

@@ -5,8 +5,7 @@ private[blaze] object HeaderTools {
   case class SpecialHeaders(
       transferEncoding: Option[String],
       contentLength: Option[String],
-      connection: Option[String])(
-      val hasDateHeader: Boolean)
+      connection: Option[String])
 
   def isKeepAlive(headerValue: String, minorVersion: Int): Boolean = {
     if (headerValue.equalsIgnoreCase("keep-alive")) true
@@ -24,7 +23,6 @@ private[blaze] object HeaderTools {
     var transferEncoding: Option[String] = None
     var contentLength: Option[String] = None
     var connection: Option[String] = None
-    var hasDateHeader = false
 
     val hl = HeaderLike[H]
     val it = headers.iterator
@@ -42,10 +40,6 @@ private[blaze] object HeaderTools {
       } else if (k.equalsIgnoreCase("connection")) {
         connection = Some(v)
       } else {
-        if (k.equalsIgnoreCase("date")) {
-          hasDateHeader = true
-        }
-
         sb.append(k)
         if (v.length > 0) sb.append(": ").append(v)
         sb.append("\r\n")
@@ -55,6 +49,6 @@ private[blaze] object HeaderTools {
     SpecialHeaders(
       transferEncoding,
       contentLength,connection
-    )(hasDateHeader)
+    )
   }
 }
