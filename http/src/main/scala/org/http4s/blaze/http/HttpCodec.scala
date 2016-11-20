@@ -26,7 +26,6 @@ private final class HttpCodec(maxNonBodyBytes: Int, pipeline: TailStage[ByteBuff
   import HttpCodec._
 
   private[this] val parser = new BlazeServerParser[(String, String)](maxNonBodyBytes)
-
   private[this] var buffered: ByteBuffer = BufferTools.emptyBuffer
 
   private[this] val lock = parser
@@ -35,11 +34,22 @@ private final class HttpCodec(maxNonBodyBytes: Int, pipeline: TailStage[ByteBuff
     parser.isReset()
   }
 
+  // TODO: how may of these locks are necessary? The only time things may be happening concurrently
+  // TODO: is when users are mishandling the body encoder.
   def getRequest(): Future[HttpRequest] = lock.synchronized {
     if (parser.isReset()) {
-      val p = Promise[HttpRequest]
-      doGetRequest(p)
-      p.future
+      try {
+        val req = maybeGetRequest()
+        if (req != null) Future.successful(req)
+        else {
+          val p = Promise[HttpRequest]
+          readAndGetRequest(p)
+          p.future
+        }
+      } catch { case t: Throwable =>
+        shutdown()
+        Future.failed(t)
+      }
     } else {
       val msg = "Attempted to get next request when protocol was in invalid state"
       Future.failed(new IllegalArgumentException(msg))
@@ -110,33 +120,44 @@ private final class HttpCodec(maxNonBodyBytes: Int, pipeline: TailStage[ByteBuff
   }
 
   // Must be called from within a `lock.synchronized` block
-  private def doGetRequest(p: Promise[HttpRequest]): Unit = {
-    try {
+  private[this] def readAndGetRequest(p: Promise[HttpRequest]): Unit = {
+    // we need to get more data
+    pipeline.channelRead().onComplete {
+      case Success(buff)    =>
+        lock.synchronized {
+          try {
+            buffered = BufferTools.concatBuffers(buffered, buff)
+            val httpRequest = maybeGetRequest()
+            if (httpRequest != null) {
+              p.trySuccess(httpRequest)
+            }
+            else {
+              readAndGetRequest(p)
+            }
+          } catch {
+            case t: Throwable =>
+              shutdown()
+              p.tryFailure(t)
+          }
+        }
+
+      case Failure(e) =>
+        lock.synchronized { shutdown() }
+        p.tryFailure(e)
+    }(Execution.trampoline)
+  }
+
+
+  // WARNING: may return `null` for performance reasons.
+  // WARNING: must be called from within a `lock.synchronized` block
+  private[this] def maybeGetRequest(): HttpRequest = {
       if (parser.parsePrelude(buffered)) {
         val prelude = parser.getRequestPrelude()
         val body = getBody()
-        val req = HttpRequest(prelude.method, prelude.uri, prelude.headers.toSeq, body)
-        p.trySuccess(req)
+        HttpRequest(prelude.method, prelude.uri, prelude.headers.toSeq, body)
+      } else {
+        null
       }
-      else  {
-        // we need to get more data
-        pipeline.channelRead().onComplete {
-          case Success(buff)    =>
-            lock.synchronized {
-              buffered = BufferTools.concatBuffers(buffered, buff)
-              doGetRequest(p)
-            }
-
-          case Failure(e) =>
-            lock.synchronized { shutdown() }
-            p.tryFailure(e)
-        }(Execution.trampoline)
-      }
-    }
-    catch { case t: Throwable =>
-      shutdown()
-      p.tryFailure(t)
-    }
   }
 
   def shutdown(): Unit = lock.synchronized {
