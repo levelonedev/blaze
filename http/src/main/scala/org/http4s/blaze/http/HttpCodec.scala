@@ -40,9 +40,8 @@ private final class HttpCodec(maxNonBodyBytes: Int, pipeline: TailStage[ByteBuff
       val p = Promise[HttpRequest]
       doGetRequest(p)
       p.future
-    }
-    else {
-      val msg = "Attempted to get next request when socket stream was not in the correct state"
+    } else {
+      val msg = "Attempted to get next request when protocol was in invalid state"
       Future.failed(new IllegalArgumentException(msg))
     }
   }
@@ -69,6 +68,8 @@ private final class HttpCodec(maxNonBodyBytes: Int, pipeline: TailStage[ByteBuff
 
     if (!keepAlive) sb.append("connection: close\r\n")
     else if (minorVersion == 0 && keepAlive) sb.append("connection: keep-alive\r\n")
+
+    // TODO: host and date headers
 
     sh match {
       case SpecialHeaders(Some(te), _, _) if te.equalsIgnoreCase("chunked") =>
@@ -141,7 +142,6 @@ private final class HttpCodec(maxNonBodyBytes: Int, pipeline: TailStage[ByteBuff
   def shutdown(): Unit = lock.synchronized {
     parser.shutdownParser()
   }
-
 
   // Body writers ///////////////////
 

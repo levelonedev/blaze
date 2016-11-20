@@ -25,7 +25,7 @@ object Http2Selector {
 
     def builder(s: String): LeafBuilder[ByteBuffer] = s match {
     case H2 | H2_14 => LeafBuilder(http2Stage(service, maxBody, maxNonbodyLength, ec))
-    case _          => LeafBuilder(new HttpServerStage(maxNonbodyLength, ec)(service))
+    case _          => LeafBuilder(new HttpServerStage(service, maxNonbodyLength, ec))
     }
 
     def selector(protocols: Seq[String]): String =

@@ -6,16 +6,12 @@ import java.nio.charset.StandardCharsets
 
 import org.http4s.blaze.pipeline.{Command => Cmd, _}
 import org.http4s.blaze.util.Execution._
-import org.http4s.websocket.WebsocketBits.WebSocketFrame
-import org.http4s.websocket.WebsocketHandshake
-import org.http4s.blaze.http.parser.BaseExceptions.BadRequest
-import org.http4s.blaze.http.websocket.WebSocketDecoder
 import org.http4s.blaze.pipeline.Command.EOF
 
 import scala.util.{Failure, Success}
-import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.ExecutionContext
 
-class HttpServerStage(maxNonBodyBytes: Int, ec: ExecutionContext)(handleRequest: HttpService)
+class HttpServerStage(handleRequest: HttpService, maxNonBodyBytes: Int, ec: ExecutionContext)
   extends TailStage[ByteBuffer] { httpServerStage =>
 
   private implicit def implicitEC = trampoline
@@ -35,7 +31,7 @@ class HttpServerStage(maxNonBodyBytes: Int, ec: ExecutionContext)(handleRequest:
   private def requestLoop(): Unit = {
     codec
       .getRequest()
-      .flatMap(handleRequest)
+      .flatMap(handleRequest)(ec)
       .onComplete {
         case Success(HttpResponse(resp)) =>
           codec.renderResponse(resp).onComplete {
@@ -65,34 +61,6 @@ class HttpServerStage(maxNonBodyBytes: Int, ec: ExecutionContext)(handleRequest:
 
     RouteAction.byteBuffer(500, "Internal Server Error", Nil, body)
   }
-
-//  /** Deal with route response of WebSocket form */
-//  private def handleWebSocket(reqHeaders: Headers, wsBuilder: LeafBuilder[WebSocketFrame]): Future[RouteResult] = {
-//    val sb = new StringBuilder(512)
-//    WebsocketHandshake.serverHandshake(reqHeaders) match {
-//      case Left((i, msg)) =>
-//        logger.info(s"Invalid handshake: $i: $msg")
-//        sb.append("HTTP/1.1 ").append(i).append(' ').append(msg).append('\r').append('\n')
-//          .append('\r').append('\n')
-//
-//        channelWrite(ByteBuffer.wrap(sb.result().getBytes(StandardCharsets.ISO_8859_1)))
-//          .map(_ => Close)
-//
-//      case Right(hdrs) =>
-//        logger.info("Starting websocket request")
-//        sb.append("HTTP/1.1 101 Switching Protocols\r\n")
-//        hdrs.foreach { case (k, v) => sb.append(k).append(": ").append(v).append('\r').append('\n') }
-//        sb.append('\r').append('\n')
-//
-//        // write the accept headers and reform the pipeline
-//        channelWrite(ByteBuffer.wrap(sb.result().getBytes(StandardCharsets.ISO_8859_1))).map{ _ =>
-//          logger.debug("Switching pipeline segments for upgrade")
-//          val segment = wsBuilder.prepend(new WebSocketDecoder(false))
-//          this.replaceInline(segment)
-//          Upgrade
-//        }
-//    }
-//  }
 
   private def shutdownWithCommand(cmd: Cmd.OutboundCommand): Unit = {
     stageShutdown()

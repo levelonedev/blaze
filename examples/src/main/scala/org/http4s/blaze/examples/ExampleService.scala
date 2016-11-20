@@ -16,7 +16,7 @@ object ExampleService {
   private implicit val ec = Execution.trampoline
 
   def http1Stage(status: Option[IntervalConnectionMonitor], maxRequestLength: Int, channel: Option[AtomicReference[ServerChannel]] = None): HttpServerStage =
-    new HttpServerStage(maxRequestLength, Execution.trampoline)(service(status, channel))
+    new HttpServerStage(service(status, channel), maxRequestLength, Execution.trampoline)
 
   def service(status: Option[IntervalConnectionMonitor], channel: Option[AtomicReference[ServerChannel]] = None)
              (request: HttpRequest): Future[ResponseBuilder] = {
