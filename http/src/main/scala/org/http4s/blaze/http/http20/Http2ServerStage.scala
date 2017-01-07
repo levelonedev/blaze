@@ -122,7 +122,7 @@ class Http2ServerStage(streamId: Int,
     }
 
     if (error.length() > 0) shutdownWithCommand(Cmd.Error(PROTOCOL_ERROR(error, fatal = false)))
-    else service(HttpRequest(method, path, hs, body))
+    else service(HttpRequest(method, path, 2, 0, hs, body))
       .onComplete(renderResponse(method, _))(ec)
   }
 

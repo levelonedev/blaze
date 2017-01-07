@@ -58,8 +58,8 @@ private final class HttpCodec(maxNonBodyBytes: Int, pipeline: TailStage[ByteBuff
     }
   }
 
-  def renderResponse(response: RouteAction): Future[RouteResult] = {
-    response.handle(getEncoder(false, _))
+  def renderResponse(response: RouteAction, forceClose: Boolean): Future[RouteResult] = {
+    response.handle(getEncoder(forceClose, _))
   }
 
   private def getEncoder(forceClose: Boolean, prelude: HttpResponsePrelude): InternalWriter = lock.synchronized {
@@ -164,7 +164,7 @@ private final class HttpCodec(maxNonBodyBytes: Int, pipeline: TailStage[ByteBuff
       if (parser.parsePrelude(buffered)) {
         val prelude = parser.getRequestPrelude()
         val body = getBody()
-        HttpRequest(prelude.method, prelude.uri, prelude.headers.toSeq, body)
+        HttpRequest(prelude.method, prelude.uri, prelude.majorVersion, prelude.minorVersion, prelude.headers.toSeq, body)
       } else {
         null
       }

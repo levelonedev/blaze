@@ -3,6 +3,7 @@ package org.http4s.blaze.http
 
 import java.nio.ByteBuffer
 
+import org.http4s.blaze.http.util.HeaderNames
 import org.http4s.blaze.pipeline.{Command => Cmd, _}
 import org.http4s.blaze.util.Execution._
 import org.http4s.blaze.pipeline.Command.EOF
@@ -14,9 +15,7 @@ class HttpServerStage(service: HttpService, maxNonBodyBytes: Int, ec: ExecutionC
   extends TailStage[ByteBuffer] { httpServerStage =>
 
   private implicit def implicitEC = trampoline
-
   val name = "HTTP/1.1_Stage"
-
   private[this] val codec = new  HttpCodec(maxNonBodyBytes, this)
 
   /////////////////////////////////////////////////////////////////////////////////////////
@@ -25,6 +24,13 @@ class HttpServerStage(service: HttpService, maxNonBodyBytes: Int, ec: ExecutionC
   override def stageStartup() {
     logger.debug("Starting HttpStage")
     dispatchLoop()
+  }
+
+  // wrapped service that includes whether the request requires the connection be closed
+  private val checkCloseService = { req: HttpRequest =>
+    service(req).map { resp =>
+      resp -> requestRequiresClose(req)
+    }(ec)
   }
 
   private def dispatchLoop(): Unit = {
@@ -40,11 +46,11 @@ class HttpServerStage(service: HttpService, maxNonBodyBytes: Int, ec: ExecutionC
       */
     codec
       .getRequest()
-      .flatMap(service)(ec)
+      .flatMap(checkCloseService)(ec)
       .onComplete {
-        case Success(HttpResponse(resp)) =>
-          codec.renderResponse(resp).onComplete {
-            case Success(HttpCodec.Reload) => dispatchLoop()
+        case Success((HttpResponse(resp), requireClose)) =>
+          codec.renderResponse(resp, requireClose).onComplete {
+            case Success(HttpCodec.Reload) => dispatchLoop()  // continue the loop
             case Success(HttpCodec.Close) => sendOutboundCommand(Cmd.Disconnect)
 
             case Failure(EOF) => /* NOOP */
@@ -53,12 +59,13 @@ class HttpServerStage(service: HttpService, maxNonBodyBytes: Int, ec: ExecutionC
               shutdownWithCommand(Cmd.Error(ex))
           }
 
-        case Success(WSResponseBuilder(resp)) => ???
+          // What to do about websocket responses...
+        case Success((WSResponseBuilder(resp), requireClose)) => ???
 
         case Failure(EOF) => /* NOOP */
         case Failure(ex) =>
           val resp = make5xx(ex)
-          codec.renderResponse(resp.action).onComplete { _ =>
+          codec.renderResponse(resp.action, forceClose = true).onComplete { _ =>
             shutdownWithCommand(Cmd.Error(ex))
           }
       }
@@ -72,6 +79,18 @@ class HttpServerStage(service: HttpService, maxNonBodyBytes: Int, ec: ExecutionC
   private def shutdownWithCommand(cmd: Cmd.OutboundCommand): Unit = {
     stageShutdown()
     sendOutboundCommand(cmd)
+  }
+
+  // Determine if this request requires the connection be closed
+  private def requestRequiresClose(request: HttpRequest): Boolean = {
+    val connHeader = request.headers.find { case (k, _) => k.equalsIgnoreCase(HeaderNames.Connection) }
+    if (request.minorVersion == 0) connHeader match {
+      case Some((_,v)) => !v.equalsIgnoreCase("keep-alive")
+      case None => true
+    } else connHeader match {
+      case Some((_, v)) => v.equalsIgnoreCase("close")
+      case None => false
+    }
   }
 
   override protected def stageShutdown(): Unit = {

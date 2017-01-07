@@ -33,11 +33,11 @@ private[blaze] object HeaderTools {
       val v = hl.getValue(header)
 
       // We are not allowing chunked responses at the moment, strip our Chunked-Encoding headers
-      if (k.equalsIgnoreCase("transfer-encoding")) {
+      if (k.equalsIgnoreCase(HeaderNames.TransferEncoding)) {
         transferEncoding = Some(v)
-      } else if (k.equalsIgnoreCase("content-length")) {
+      } else if (k.equalsIgnoreCase(HeaderNames.ContentLength)) {
         contentLength = Some(v)
-      } else if (k.equalsIgnoreCase("connection")) {
+      } else if (k.equalsIgnoreCase(HeaderNames.Connection)) {
         connection = Some(v)
       } else {
         sb.append(k)

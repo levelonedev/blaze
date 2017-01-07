@@ -49,10 +49,8 @@ class HttpServerStageSpec extends Specification {
     acc.result()
   }
 
-  private def newStage(): HttpServerStage = new HttpServerStage(Int.MaxValue, ec)(service)
-
   private def runPipeline(requests: HttpRequest*): ByteBuffer = {
-    val leaf = newStage()
+    val leaf = new HttpServerStage(service, Int.MaxValue, ec)
     val head = new GatheringSeqHead[ByteBuffer](renderRequests(requests:_*))
     LeafBuilder(leaf).base(head)
 
@@ -60,7 +58,6 @@ class HttpServerStageSpec extends Specification {
   }
 
   private def service(request: HttpRequest): Future[ResponseBuilder] = {
-    println(s"Request: $request")
     request.uri match {
       case _ if request.method == "POST" =>
         request.body.accumulate().map { body =>
@@ -75,49 +72,48 @@ class HttpServerStageSpec extends Specification {
 
   "HttpServerStage" should {
     "respond to a simple ping" in {
-      val request = HttpRequest("GET", "/ping", Nil, MessageBody.emptyMessageBody)
+      val request = HttpRequest("GET", "/ping", 1, 1, Nil, MessageBody.emptyMessageBody)
 
       val resp = runPipeline(request)
       val (code, hs, body) = ResponseParser(resp)
       code must_== 200
       body must_== "ping response"
-      hs.toSet must_== Set("connection" -> "close", "content-length" -> "13")
+      hs.toMap must havePairs("connection" -> "close", "content-length" -> "13")
     }
 
-//    "run two requests" in {
-//      val request1 = HttpRequest("GET", "/ping", Nil, MessageBody.emptyMessageBody)
-//      val request2 = HttpRequest("GET", "/pong", Nil, MessageBody.emptyMessageBody)
-//
-//      val resp = runPipeline(request1, request2)
-//
-//      { // first response
-//        val (code, hs, body) = ResponseParser(resp)
-//
-//        code must_== 200
-//        body must_== "ping response"
-//        hs.toSet must_== Set("Content-Length" -> "13")
-//      }
-//
-//      { // second response
-//        val (code, hs, body) = ResponseParser(resp)
-//
-//        code must_== 200
-//        body must_== "pong response"
-//        hs.toSet must_== Set("connection" -> "close", "Content-Length" -> "13")
-//      }
-//    }
-//
-//    "run a request with a body" in {
-//      val b = StandardCharsets.UTF_8.encode("data")
-//      val req = HttpRequest("POST", "/foo", Seq("content-length" -> "4"), MessageBody(b))
-//
-//      val resp = runPipeline(req)
-//
-//      val (code, hs, body) = ResponseParser(resp)
-//      code must_== 200
-//      body must_== "Body: data"
-//      hs.toSet must_== Set("connection" -> "close", "Content-Length" -> "10")
-//    }
-  }
+    "run two requests" in {
+      val request1 = HttpRequest("GET", "/ping", 1, 1, Nil, MessageBody.emptyMessageBody)
+      val request2 = HttpRequest("GET", "/pong", 1, 1, Nil, MessageBody.emptyMessageBody)
 
+      val resp = runPipeline(request1, request2)
+
+      { // first response
+        val (code, hs, body) = ResponseParser(resp)
+
+        code must_== 200
+        body must_== "ping response"
+        hs.toMap must contain("content-length" -> "13")
+      }
+
+      { // second response
+        val (code, hs, body) = ResponseParser(resp)
+
+        code must_== 200
+        body must_== "pong response"
+        hs.toMap must contain("connection" -> "close", "content-length" -> "13")
+      }
+    }
+
+    "run a request with a body" in {
+      val b = StandardCharsets.UTF_8.encode("data")
+      val req = HttpRequest("POST", "/foo", 1, 1, Seq("content-length" -> "4"), MessageBody(b))
+
+      val resp = runPipeline(req)
+
+      val (code, hs, body) = ResponseParser(resp)
+      code must_== 200
+      body must_== "Body: data"
+      hs.toMap must contain("connection" -> "close", "content-length" -> "10")
+    }
+  }
 }
