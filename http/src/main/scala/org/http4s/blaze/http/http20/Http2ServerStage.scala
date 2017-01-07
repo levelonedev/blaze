@@ -58,7 +58,7 @@ class Http2ServerStage(streamId: Int,
   }
 
   private def getBodyReader(hs: Headers): Unit = {
-    val length = hs.collectFirst {
+    val length: Option[Either[String, Long]] = hs.collectFirst {
       case (ContentLength, v) =>
         try Right(java.lang.Long.valueOf(v))
         catch { case t: NumberFormatException =>
