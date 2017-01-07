@@ -3,20 +3,20 @@ package org.http4s.blaze.http
 
 import java.nio.ByteBuffer
 
-import org.http4s.blaze.http.util.HeaderNames
+import org.http4s.blaze.http.util.{HeaderNames, ServiceTimeoutFilter}
 import org.http4s.blaze.pipeline.{Command => Cmd, _}
-import org.http4s.blaze.util.Execution._
+import org.http4s.blaze.util.Execution
 import org.http4s.blaze.pipeline.Command.EOF
 
 import scala.util.{Failure, Success}
-import scala.concurrent.ExecutionContext
+import scala.util.control.NoStackTrace
 
-class HttpServerStage(service: HttpService, maxNonBodyBytes: Int, ec: ExecutionContext)
-  extends TailStage[ByteBuffer] { httpServerStage =>
+class HttpServerStage(service: HttpService, config: HttpServerConfig) extends TailStage[ByteBuffer] {
+  import HttpServerStage._
 
-  private implicit def implicitEC = trampoline
+  private implicit def implicitEC = Execution.trampoline
   val name = "HTTP/1.1_Stage"
-  private[this] val codec = new  HttpCodec(maxNonBodyBytes, this)
+  private[this] val codec = new  HttpCodec(config.maxNonBodyBytes, this)
 
   /////////////////////////////////////////////////////////////////////////////////////////
 
@@ -26,11 +26,14 @@ class HttpServerStage(service: HttpService, maxNonBodyBytes: Int, ec: ExecutionC
     dispatchLoop()
   }
 
-  // wrapped service that includes whether the request requires the connection be closed
-  private val checkCloseService = { req: HttpRequest =>
-    service(req).map { resp =>
+  // wrapped service that includes whether the request requires the connection be closed and deals with any timeouts
+  private val checkCloseService = {
+    // Apply any service level timeout
+    val timeoutService = ServiceTimeoutFilter(config.serviceTimeout)(service)
+
+    req: HttpRequest => timeoutService(req).map { resp =>
       resp -> requestRequiresClose(req)
-    }(ec)
+    }(Execution.directec)
   }
 
   private def dispatchLoop(): Unit = {
@@ -44,9 +47,9 @@ class HttpServerStage(service: HttpService, maxNonBodyBytes: Int, ec: ExecutionC
       * - Long durations of network silence when reading or rendering a body
       *   - These could probably be done by wrapping readers and writers
       */
-    codec
-      .getRequest()
-      .flatMap(checkCloseService)(ec)
+    Execution.withTimeout(config.requestPreludeTimeout, TryRequestTimeoutExec)(codec.getRequest())
+      .flatMap(checkCloseService)(config.serviceExecutor)
+      .recover { case RequestTimeoutException => newRequestTimeoutResponse() }  // handle request timeouts
       .onComplete {
         case Success((HttpResponse(resp), requireClose)) =>
           codec.renderResponse(resp, requireClose).onComplete {
@@ -93,8 +96,19 @@ class HttpServerStage(service: HttpService, maxNonBodyBytes: Int, ec: ExecutionC
     }
   }
 
+  // TODO: can this be shared with http2?
+  private def newRequestTimeoutResponse(): (ResponseBuilder, Boolean) = {
+    val msg = s"Request timed out after ${config.requestPreludeTimeout}"
+    RouteAction.string(408, "Request Time-out", Nil, msg) -> true // force close
+  }
+
   override protected def stageShutdown(): Unit = {
     logger.info("Shutting down HttpPipeline")
     codec.shutdown()
   }
+}
+
+private object HttpServerStage {
+  object RequestTimeoutException extends Exception with NoStackTrace
+  val TryRequestTimeoutExec = Failure(RequestTimeoutException)
 }

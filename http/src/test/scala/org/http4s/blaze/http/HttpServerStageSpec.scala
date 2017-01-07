@@ -50,7 +50,7 @@ class HttpServerStageSpec extends Specification {
   }
 
   private def runPipeline(requests: HttpRequest*): ByteBuffer = {
-    val leaf = new HttpServerStage(service, Int.MaxValue, ec)
+    val leaf = new HttpServerStage(service, HttpServerConfig())
     val head = new GatheringSeqHead[ByteBuffer](renderRequests(requests:_*))
     LeafBuilder(leaf).base(head)
 
