@@ -53,6 +53,7 @@ object RouteAction {
   def byteBuffer(code: Int, status: String, headers: Headers, body: ByteBuffer): HttpResponse = HttpResponse(
     new RouteAction {
       override def handle[T <: BodyWriter](responder: (HttpResponsePrelude) => T): Future[T#Finished] = {
+        // TODO: we should add a content-length header
 
         val prelude = HttpResponsePrelude(code, status, headers)
         val writer = responder(prelude)

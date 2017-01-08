@@ -318,7 +318,10 @@ private final class HttpCodec(maxNonBodyBytes: Int, pipeline: TailStage[ByteBuff
       else {
         flushCache(true).map( _ => lock.synchronized {
           if (forceClose || !parser.contentComplete()) Close
-          else Reload
+          else {
+            parser.reset()
+            Reload
+          }
         })(Execution.directec)
       }
     }

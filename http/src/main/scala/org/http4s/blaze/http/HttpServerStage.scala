@@ -75,7 +75,7 @@ class HttpServerStage(service: HttpService, config: HttpServerConfig) extends Ta
   }
 
   private def make5xx(error: Throwable): HttpResponse = {
-    logger.error(error)("Failed to select a response. Sending 500 response.")
+    logger.error(error)("Failed to service request. Sending 500 response.")
     RouteAction.string(500, "Internal Server Error", Nil, "Internal Server Error.")
   }
 

@@ -31,8 +31,7 @@ object ExampleService {
     }
     else Future.successful {
       request.uri match {
-        case "/bigstring" =>
-          RouteAction.Ok(bigstring, ("content-type", "application/binary") :: Nil)
+        case "/bigstring" => RouteAction.Ok(bigstring)
 
         case "/chunkedstring" =>
 
