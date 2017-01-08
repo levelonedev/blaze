@@ -76,7 +76,7 @@ class HttpServerStage(service: HttpService, config: HttpServerConfig) extends Ta
 
   private def make5xx(error: Throwable): HttpResponse = {
     logger.error(error)("Failed to service request. Sending 500 response.")
-    RouteAction.string(500, "Internal Server Error", Nil, "Internal Server Error.")
+    RouteAction.String(500, "Internal Server Error", Nil, "Internal Server Error.")
   }
 
   private def shutdownWithCommand(cmd: Cmd.OutboundCommand): Unit = {
@@ -99,7 +99,7 @@ class HttpServerStage(service: HttpService, config: HttpServerConfig) extends Ta
   // TODO: can this be shared with http2?
   private def newRequestTimeoutResponse(): (ResponseBuilder, Boolean) = {
     val msg = s"Request timed out after ${config.requestPreludeTimeout}"
-    RouteAction.string(408, "Request Time-out", Nil, msg) -> true // force close
+    RouteAction.String(408, "Request Time-out", Nil, msg) -> true // force close
   }
 
   override protected def stageShutdown(): Unit = {

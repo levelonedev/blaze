@@ -3,9 +3,11 @@ package org.http4s.blaze.http
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 
+import org.http4s.blaze.http.util.HeaderNames
 import org.http4s.blaze.util.Execution
 
-import scala.concurrent.Future
+import scala.concurrent.{ExecutionContext, Future, Promise}
+import scala.util.{Failure, Success}
 
 /** Post routing response generator */
 trait RouteAction {
@@ -26,18 +28,36 @@ object RouteAction {
     *             before requesting another chunk. Termination is signaled by an __empty__ `ByteBuffer` as
     *             defined by the return value of `ByteBuffer.hasRemaining()`.
     */
-  def streaming(code: Int, status: String, headers: Headers)(body: () => Future[ByteBuffer]): HttpResponse = HttpResponse(
+  def Streaming(code: Int, status: String, headers: Headers)
+               (body: () => Future[ByteBuffer])
+               (implicit ec: ExecutionContext = Execution.trampoline): HttpResponse = HttpResponse(
     new RouteAction {
       override def handle[T <: BodyWriter](responder: (HttpResponsePrelude) => T): Future[T#Finished] = {
-        implicit val ec = Execution.trampoline
         val writer = responder(HttpResponsePrelude(code, status, headers))
 
-        def go(): Future[T#Finished] = body().flatMap {
-          case buff if buff.hasRemaining => writer.write(buff).flatMap(_ => go())
-          case _ => writer.close()
+//        // Not safe to do in scala 2.11 or lower :(
+//        def go_(): Future[T#Finished] = body().flatMap {
+//          case buff if buff.hasRemaining => writer.write(buff).flatMap(_ => go())
+//          case _ => writer.close()
+//        }
+
+        val p = Promise[T#Finished]
+
+        // Have to do this nonsense because a recursive Future loop isn't safe until scala 2.12+
+        def go(): Unit = body().onComplete {
+          case Failure(t) => p.tryFailure(t)
+          case Success(buff) =>
+            if (!buff.hasRemaining) p.completeWith(writer.close())
+            else writer.write(buff).onComplete {
+              case Success(_) => go()
+              case Failure(t) => p.tryFailure(t)
+            }
         }
 
-        go()
+        // Start our loop in the EC
+        ec.prepare().execute(new Runnable { def run(): Unit = go() })
+
+        p.future
       }
     }
   )
@@ -50,12 +70,11 @@ object RouteAction {
     * read-only views of it when writing to the socket, so the resulting responses
     * can be reused multiple times.
     */
-  def byteBuffer(code: Int, status: String, headers: Headers, body: ByteBuffer): HttpResponse = HttpResponse(
+  def Buffer(code: Int, status: String, headers: Headers, body: ByteBuffer): HttpResponse = HttpResponse(
     new RouteAction {
       override def handle[T <: BodyWriter](responder: (HttpResponsePrelude) => T): Future[T#Finished] = {
-        // TODO: we should add a content-length header
-
-        val prelude = HttpResponsePrelude(code, status, headers)
+        val finalHeaders = (HeaderNames.ContentLength, body.remaining().toString) +: headers
+        val prelude = HttpResponsePrelude(code, status, finalHeaders)
         val writer = responder(prelude)
 
         writer.write(body.asReadOnlyBuffer()).flatMap(_ => writer.close())(Execution.directec)
@@ -64,26 +83,25 @@ object RouteAction {
   )
 
   /** generate a HTTP response from a String */
-  def string(code: Int, status: String, headers: Headers, body: String): HttpResponse =
-    byteBuffer(code, status, ("content-type", "text/plain; charset=utf-8")+:headers, StandardCharsets.UTF_8.encode(body))
+  def String(code: Int, status: String, headers: Headers, body: String): HttpResponse =
+    Buffer(code, status, Utf8StringHeader +: headers, StandardCharsets.UTF_8.encode(body))
 
   /** Generate a 200 OK HTTP response from an `Array[Byte]` */
   def Ok(body: Array[Byte], headers: Headers = Nil): HttpResponse =
-    byteBuffer(200, "OK", headers, ByteBuffer.wrap(body))
+    Buffer(200, "OK", headers, ByteBuffer.wrap(body))
 
   /** Generate a 200 OK HTTP response from an `Array[Byte]` */
   def Ok(body: Array[Byte]): HttpResponse = Ok(body, Nil)
 
   /** Generate a 200 OK HTTP response from a `String` */
-  def Ok(body: String, headers: Headers): HttpResponse = {
-    val bytes = body.getBytes(StandardCharsets.UTF_8)
-    val hs = ("content-type", "text/plain; charset=utf-8") +: ("content-length", bytes.length.toString) +: headers
-    Ok(bytes, hs)
-  }
+  def Ok(body: String, headers: Headers): HttpResponse =
+    Ok(body.getBytes(StandardCharsets.UTF_8), Utf8StringHeader +: headers)
 
   /** Generate a 200 OK HTTP response from a `String` */
   def Ok(body: String): HttpResponse = Ok(body, Nil)
 
   def EntityTooLarge(): HttpResponse =
-    string(413, "Request Entity Too Large", Nil, s"Request Entity Too Large")
+    String(413, "Request Entity Too Large", Nil, s"Request Entity Too Large")
+
+  private val Utf8StringHeader = "content-type" -> "text/plain; charset=utf-8"
 }

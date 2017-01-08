@@ -31,6 +31,7 @@ object ExampleService {
     }
     else Future.successful {
       request.uri match {
+        case "/ping" => RouteAction.Ok("pong")
         case "/bigstring" => RouteAction.Ok(bigstring)
 
         case "/chunkedstring" =>
@@ -46,7 +47,7 @@ object ExampleService {
             }
           }
 
-          RouteAction.streaming(200, "OK", Nil)(body)
+          RouteAction.Streaming(200, "OK", Nil)(body)
 
         case "/status" =>
           RouteAction.Ok(status.map(_.getStats().toString).getOrElse("Missing Status."))
@@ -60,7 +61,7 @@ object ExampleService {
             case h@(k, _) if k.equalsIgnoreCase("Content-type") => h
           }
 
-          RouteAction.streaming(200, "OK", hs) { () =>
+          RouteAction.Streaming(200, "OK", hs) { () =>
             request.body()
           }
 

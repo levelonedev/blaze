@@ -21,6 +21,6 @@ private[blaze] object ServiceTimeoutFilter {
 
   private def newServiceTimeoutResponse(timeout: Duration): ResponseBuilder = {
     val msg = s"Request timed out after $timeout"
-    RouteAction.string(500, "Internal Timeout", List(HeaderNames.Connection -> "close"), msg)
+    RouteAction.String(500, "Internal Timeout", List(HeaderNames.Connection -> "close"), msg)
   }
 }
